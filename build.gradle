@@ -1,4 +1,8 @@
 ext.githubProjectName = rootProject.name
+apply plugin: 'maven'
+apply plugin: 'java'
+
+version = '0.2.1-bt'
 
 buildscript {
     repositories {
@@ -6,6 +10,14 @@ buildscript {
       mavenCentral() // maven { url 'http://jcenter.bintray.com' }
     }
     apply from: file('gradle/buildscript.gradle'), to: buildscript 
+}
+
+uploadArchives {
+    repositories {
+        mavenDeployer {
+            repository(url: "file://Users/zdexter/.m2/")
+        }
+    }
 }
 
 allprojects {
