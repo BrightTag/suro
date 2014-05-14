@@ -20,7 +20,6 @@ import java.util.Map;
  * @author elandau
  */
 public class DynamicPropertySinkConfigurator {
-    private static final Logger log = LoggerFactory.getLogger(DynamicPropertySinkConfigurator.class);
 
     public static final String SINK_PROPERTY = "SuroServer.sinkConfig";
 
@@ -60,7 +59,6 @@ public class DynamicPropertySinkConfigurator {
             sinkManager.set(newSinkMap);
         }
         catch (Exception e) {
-            log.info("*******blah");
             log.error("Exception on building SinkManager: " + e.getMessage(), e);
         }
     }

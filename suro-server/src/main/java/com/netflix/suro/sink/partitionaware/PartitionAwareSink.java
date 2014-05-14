@@ -7,7 +7,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.base.Preconditions;
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.AsyncEventBus;
-import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.netflix.suro.event.PartitionEvent;
 import com.netflix.suro.message.MessageContainer;
@@ -49,26 +48,26 @@ public class PartitionAwareSink implements Sink {
     private SinkType sinkType;
     private final KafkaPing kafkaPing;
     private boolean isDrainingFiles = false;
-    private final EventBus eventBus;
+    private final AsyncEventBus eventBus;
 
     @JsonCreator
     public PartitionAwareSink(
             @JsonProperty("kafkaSink") KafkaSink kafkaSink,
             @JsonProperty("fileSink") LocalFileSink fileSink,
-            @JacksonInject("async event bus") AsyncEventBus asyncEventBus
+            @JacksonInject("async event bus") AsyncEventBus eventBus
             ) {
         Preconditions.checkNotNull(kafkaSink, "Kafka sink needed");
         Preconditions.checkNotNull(fileSink, "Local file sink needed");
-        Preconditions.checkNotNull(asyncEventBus, "Async event bus needed");
+        Preconditions.checkNotNull(eventBus, "Async event bus needed");
 
         kafkaPing = new KafkaPing("localhost", 9092, "suroserver-guestvm", "segfire_metrics");
 
         this.kafkaSink = kafkaSink;
         this.fileSink = fileSink;
-        this.eventBus = asyncEventBus;
+        this.eventBus = eventBus;
 
         eventBus.register(this);
-        kafkaSink.setEventBus(asyncEventBus);
+        kafkaSink.setEventBus(eventBus);
         sinkType = SinkType.KAFKA;
     }
 
@@ -86,7 +85,6 @@ public class PartitionAwareSink implements Sink {
         kafkaSink.open();
         fileSink.open();
         if (!kafkaPing.isAlive()) {
-            log.info("***** posting event");
             eventBus.post(new PartitionEvent(null));
         }
     }
@@ -131,7 +129,7 @@ public class PartitionAwareSink implements Sink {
     @AllowConcurrentEvents
     public void partitionEvent(PartitionEvent e) {
         if (sinkType == SinkType.KAFKA) {
-            log.info("**** Cannot reach Kafka, switching to file sink");
+            log.info("Cannot reach Kafka, switching to file sink");
             sinkType = SinkType.FILE;
             List<Message> msgQueue = e.getMsgList();
             if (msgQueue != null) {
@@ -151,9 +149,8 @@ public class PartitionAwareSink implements Sink {
 
     private void runKafkaPinger() {
         while (sinkType == SinkType.FILE) {
-            log.info("**** Pinging kafka...");
             if (kafkaPing.isAlive()) {
-                log.info("**** Kafka is back!");
+                log.info("Kafka is back up, switching to Kafka sink");
                 sinkType = SinkType.KAFKA;
             } else {
                 sleep(5000);
@@ -176,15 +173,11 @@ public class PartitionAwareSink implements Sink {
                 try {
                     br = new BufferedReader(new FileReader(file));
                     while ((line = br.readLine()) != null) {
-                        log.info("**** file: " + file.toString());
                         MessageContainer mContainer = buildMessageContainer(new Message("segfire_metrics", line.getBytes()));
                         if (sinkType == SinkType.KAFKA) {
-                            log.info("**** writing to kafka sink...");
                             kafkaSink.writeTo(mContainer);
                             sleep(10);
                         } else {
-                            log.info("*** writing to file sink...");
-                            log.info("**** line: " + line);
                             fileSink.writeTo(mContainer);
                         }
                     }

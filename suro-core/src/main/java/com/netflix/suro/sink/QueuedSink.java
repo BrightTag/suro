@@ -4,7 +4,6 @@ import com.netflix.servo.annotations.DataSourceType;
 import com.netflix.servo.annotations.Monitor;
 import com.netflix.suro.message.Message;
 import com.netflix.suro.queue.MessageQueue4Sink;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 public abstract class QueuedSink extends Thread {
     static Logger log = LoggerFactory.getLogger(QueuedSink.class);
 
-    protected long lastBatch = System.currentTimeMillis();
+    private long lastBatch = System.currentTimeMillis();
     protected boolean isRunning = false;
     private boolean isStopped = false;
 
@@ -69,7 +68,6 @@ public abstract class QueuedSink extends Thread {
                     lastBatch = System.currentTimeMillis();
                 }
             } catch (Exception e) {
-                log.info("**** calling handleRunningException:");
                 handleRunningException(e, msgList);
             }
         }
@@ -90,7 +88,6 @@ public abstract class QueuedSink extends Thread {
     }
 
     public void handleRunningException(Exception e, List<Message> msgList) {
-        log.info("**** QueuedSink.handleRunningException called!");
         log.error("Exception on running: " + e.getMessage(), e);
     }
 

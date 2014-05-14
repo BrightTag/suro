@@ -5,10 +5,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
 import com.google.common.eventbus.AsyncEventBus;
-import com.google.common.eventbus.EventBus;
 import com.google.inject.Inject;
 import com.netflix.suro.event.PartitionEvent;
-import com.netflix.suro.event.ReconnectEvent;
 import com.netflix.suro.message.Message;
 import com.netflix.suro.message.MessageContainer;
 import com.netflix.suro.sink.QueuedSink;
@@ -41,15 +39,10 @@ import org.slf4j.LoggerFactory;
  * @author jbae
  */
 public class KafkaSink extends QueuedSink implements Sink {
-    static Logger log = LoggerFactory.getLogger(KafkaSink.class);
     public final static String TYPE = "Kafka";
-
     private final String clientId;
-
     protected final KafkaProducer producer;
-    //private TopicMetadataRequest mRequest;
-
-    private EventBus eventBus;
+    private AsyncEventBus eventBus;
 
     @JsonCreator
     public KafkaSink(
@@ -104,8 +97,7 @@ public class KafkaSink extends QueuedSink implements Sink {
         producer = new KafkaProducer(props);
     }
 
-    public void setEventBus(EventBus eventBus) {
-        log.info("**** setting eventBus: " + eventBus);
+    public void setEventBus(AsyncEventBus eventBus) {
         this.eventBus = eventBus;
     }
 
@@ -125,11 +117,8 @@ public class KafkaSink extends QueuedSink implements Sink {
 
     @Override
     protected void write(List<Message> msgList) throws IOException {
-        log.info("**** sending message");
         send(msgList);
-        log.info("**** clearing message list");
         msgList.clear();
-        log.info("**** committing message to queue");
         queue4Sink.commit();
     }
 
@@ -172,10 +161,7 @@ public class KafkaSink extends QueuedSink implements Sink {
 
     @Override
     public void handleRunningException(Exception e, List<Message> msgList) {
-        log.info("**** KafkaSink.handleRunningException called!");
-        log.info("**** eventBus: " + eventBus);
         if (eventBus != null) {
-            log.info("**** posting to event bus");
             eventBus.post(new PartitionEvent(msgList));
         } else {
             super.handleRunningException(e, msgList);

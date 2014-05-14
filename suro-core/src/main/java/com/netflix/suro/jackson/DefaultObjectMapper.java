@@ -84,7 +84,6 @@ public class DefaultObjectMapper extends ObjectMapper {
                     try {
                         return injector.getInstance(Key.get(forProperty.getType().getRawClass(), Names.named((String)valueId)));
                     } catch (Exception e) {
-                        LOG.info("***** injector error: " + e.getMessage());
                         LOG.info("No implementation found, returning null");
                         return null;
                     }
