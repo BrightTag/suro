@@ -3,6 +3,7 @@ apply plugin: 'maven'
 apply plugin: 'java'
 
 version = '0.2.1-bt'
+group = "com.netflix.${githubProjectName}"
 
 buildscript {
     repositories {

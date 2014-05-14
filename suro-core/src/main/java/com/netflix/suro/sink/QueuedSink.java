@@ -4,6 +4,7 @@ import com.netflix.servo.annotations.DataSourceType;
 import com.netflix.servo.annotations.Monitor;
 import com.netflix.suro.message.Message;
 import com.netflix.suro.queue.MessageQueue4Sink;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,13 +25,13 @@ import java.util.concurrent.TimeUnit;
 public abstract class QueuedSink extends Thread {
     static Logger log = LoggerFactory.getLogger(QueuedSink.class);
 
-    private long lastBatch = System.currentTimeMillis();
+    protected long lastBatch = System.currentTimeMillis();
     protected boolean isRunning = false;
     private boolean isStopped = false;
 
     protected MessageQueue4Sink queue4Sink;
-    private int batchSize;
-    private int batchTimeout;
+    protected int batchSize;
+    protected int batchTimeout;
 
     protected void initialize(MessageQueue4Sink queue4Sink, int batchSize, int batchTimeout) {
         this.queue4Sink = queue4Sink;
@@ -68,7 +69,8 @@ public abstract class QueuedSink extends Thread {
                     lastBatch = System.currentTimeMillis();
                 }
             } catch (Exception e) {
-                log.error("Exception on running: " + e.getMessage(), e);
+                log.info("**** calling handleRunningException:");
+                handleRunningException(e, msgList);
             }
         }
         log.info("Shutdown request exit loop ..., queue.size at exit time: " + queue4Sink.size());
@@ -85,6 +87,11 @@ public abstract class QueuedSink extends Thread {
         } finally {
             isStopped = true;
         }
+    }
+
+    public void handleRunningException(Exception e, List<Message> msgList) {
+        log.info("**** QueuedSink.handleRunningException called!");
+        log.error("Exception on running: " + e.getMessage(), e);
     }
 
     public void close() {
@@ -106,6 +113,10 @@ public abstract class QueuedSink extends Thread {
         } finally {
             log.info("close finished");
         }
+    }
+
+    public int drainQueueTo(List<Message> msgList) {
+        return queue4Sink.drain((int)getQueueSize(), msgList);
     }
 
     /**

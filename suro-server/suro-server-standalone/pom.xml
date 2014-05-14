@@ -1,0 +1,50 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.brighttag</groupId>
+  <artifactId>suro-server-standalone</artifactId>
+  <version>0.2.2</version>
+  <packaging>pom</packaging>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.netflix.suro</groupId>
+      <artifactId>suro-server</artifactId>
+      <version>0.2.2-bt</version>
+    </dependency>
+
+    <!-- suro-server bug: pom has Guava 11.0 but uses FluentIterable introduced in Guava 12.0 -->
+    <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>12.0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-assembly-plugin</artifactId>
+          <version>2.2</version>
+          <configuration>
+              <descriptorRefs>
+                  <descriptorRef>jar-with-dependencies</descriptorRef>
+              </descriptorRefs>
+              <appendAssemblyId>false</appendAssemblyId>
+              <finalName>${project.artifactId}-${project.version}</finalName>
+          </configuration>
+          <executions>
+              <execution>
+                  <id>assemble-all</id>
+                  <phase>package</phase>
+                  <goals>
+                      <goal>single</goal>
+                  </goals>
+              </execution>
+          </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>
+

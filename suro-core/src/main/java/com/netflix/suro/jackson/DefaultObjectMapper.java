@@ -46,7 +46,7 @@ public class DefaultObjectMapper extends ObjectMapper {
     public DefaultObjectMapper() {
         this(null, null);
     }
-    
+
     @Inject
     public DefaultObjectMapper(final Injector injector, Set<TypeHolder> crossInjectable)
     {
@@ -75,22 +75,23 @@ public class DefaultObjectMapper extends ObjectMapper {
             setInjectableValues(new InjectableValues() {
                 @Override
                 public Object findInjectableValue(
-                        Object valueId, 
-                        DeserializationContext ctxt, 
-                        BeanProperty forProperty, 
+                        Object valueId,
+                        DeserializationContext ctxt,
+                        BeanProperty forProperty,
                         Object beanInstance
                 ) {
                     LOG.info("Looking for " + valueId);
                     try {
                         return injector.getInstance(Key.get(forProperty.getType().getRawClass(), Names.named((String)valueId)));
                     } catch (Exception e) {
+                        LOG.info("***** injector error: " + e.getMessage());
                         LOG.info("No implementation found, returning null");
                         return null;
                     }
                 }
             });
         }
-        
+
         configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         configure(MapperFeature.AUTO_DETECT_GETTERS, false);
         configure(MapperFeature.AUTO_DETECT_CREATORS, false);
@@ -98,7 +99,7 @@ public class DefaultObjectMapper extends ObjectMapper {
         configure(MapperFeature.AUTO_DETECT_IS_GETTERS, false);
         configure(MapperFeature.AUTO_DETECT_SETTERS, false);
         configure(SerializationFeature.INDENT_OUTPUT, false);
-        
+
         if (crossInjectable != null) {
             for (TypeHolder entry : crossInjectable) {
                 LOG.info("Registering subtype : " + entry.getName() + " -> " + entry.getRawType().getCanonicalName());

@@ -47,6 +47,7 @@ public class AsyncSuroSender implements Runnable {
         this.config = config;
     }
 
+    @Override
     public void run() {
         boolean sent = false;
         boolean retried = false;
@@ -54,18 +55,20 @@ public class AsyncSuroSender implements Runnable {
 
         for (int i = 0; i < config.getRetryCount(); ++i) {
             ConnectionPool.SuroConnection connection = connectionPool.chooseConnection();
-            try {
-                ResultCode result = connection.send(messageSet).getResultCode();
-                if (result == ResultCode.OK) {
-                    sent = true;
-                    connectionPool.endConnection(connection);
-                    retried = i > 0;
-                    break;
-                }
-            } catch (Exception e) {
-                log.error("Exception in send: " + e.getMessage(), e);
-                connectionPool.markServerDown(connection);
-                client.updateSenderException();
+            if (connection != null) {
+              try {
+                  ResultCode result = connection.send(messageSet).getResultCode();
+                  if (result == ResultCode.OK) {
+                      sent = true;
+                      connectionPool.endConnection(connection);
+                      retried = i > 0;
+                      break;
+                  }
+              } catch (Exception e) {
+                  log.error("Exception in send: " + e.getMessage(), e);
+                  connectionPool.markServerDown(connection);
+                  client.updateSenderException();
+              }
             }
         }
 

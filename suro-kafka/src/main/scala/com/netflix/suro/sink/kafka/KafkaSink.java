@@ -1,14 +1,22 @@
 package com.netflix.suro.sink.kafka;
 
+import com.fasterxml.jackson.annotation.JacksonInject;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+import com.google.common.eventbus.AsyncEventBus;
+import com.google.common.eventbus.EventBus;
+import com.google.inject.Inject;
+import com.netflix.suro.event.PartitionEvent;
+import com.netflix.suro.event.ReconnectEvent;
 import com.netflix.suro.message.Message;
 import com.netflix.suro.message.MessageContainer;
 import com.netflix.suro.sink.QueuedSink;
 import com.netflix.suro.sink.Sink;
 import com.netflix.suro.queue.MemoryQueue4Sink;
 import com.netflix.suro.queue.MessageQueue4Sink;
+
+import kafka.javaapi.TopicMetadataRequest;
 import kafka.producer.KeyedMessage;
 import kafka.producer.ProducerStats;
 import kafka.producer.ProducerStatsRegistry;
@@ -19,8 +27,13 @@ import kafka.serializer.NullEncoder;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Kafka 0.8 Sink
@@ -28,11 +41,15 @@ import java.util.Properties;
  * @author jbae
  */
 public class KafkaSink extends QueuedSink implements Sink {
+    static Logger log = LoggerFactory.getLogger(KafkaSink.class);
     public final static String TYPE = "Kafka";
 
-    private String clientId;
+    private final String clientId;
 
     protected final KafkaProducer producer;
+    //private TopicMetadataRequest mRequest;
+
+    private EventBus eventBus;
 
     @JsonCreator
     public KafkaSink(
@@ -87,6 +104,11 @@ public class KafkaSink extends QueuedSink implements Sink {
         producer = new KafkaProducer(props);
     }
 
+    public void setEventBus(EventBus eventBus) {
+        log.info("**** setting eventBus: " + eventBus);
+        this.eventBus = eventBus;
+    }
+
     @Override
     public void writeTo(MessageContainer message) {
         queue4Sink.offer(message.getMessage());
@@ -103,8 +125,11 @@ public class KafkaSink extends QueuedSink implements Sink {
 
     @Override
     protected void write(List<Message> msgList) throws IOException {
+        log.info("**** sending message");
         send(msgList);
+        log.info("**** clearing message list");
         msgList.clear();
+        log.info("**** committing message to queue");
         queue4Sink.commit();
     }
 
@@ -136,12 +161,24 @@ public class KafkaSink extends QueuedSink implements Sink {
     }
 
     protected long msgId = 0;
-    private List<KeyedMessage<Long, byte[]>> kafkaMsgList = new ArrayList<KeyedMessage<Long, byte[]>>();
+    private final List<KeyedMessage<Long, byte[]>> kafkaMsgList = new ArrayList<KeyedMessage<Long, byte[]>>();
     protected void send(List<Message> msgList) {
         for (Message m : msgList) {
             kafkaMsgList.add(new KeyedMessage<Long, byte[]>(m.getRoutingKey(), msgId++, m.getPayload()));
         }
         producer.send(kafkaMsgList);
         kafkaMsgList.clear();
+    }
+
+    @Override
+    public void handleRunningException(Exception e, List<Message> msgList) {
+        log.info("**** KafkaSink.handleRunningException called!");
+        log.info("**** eventBus: " + eventBus);
+        if (eventBus != null) {
+            log.info("**** posting to event bus");
+            eventBus.post(new PartitionEvent(msgList));
+        } else {
+            super.handleRunningException(e, msgList);
+        }
     }
 }

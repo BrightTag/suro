@@ -28,6 +28,7 @@ import com.netflix.suro.routing.RoutingPlugin;
 import com.netflix.suro.server.StatusServer;
 import com.netflix.suro.sink.DynamicPropertySinkConfigurator;
 import com.netflix.suro.sink.SinkPlugin;
+
 import org.apache.commons.cli.*;
 import org.apache.commons.io.FileUtils;
 
@@ -35,11 +36,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Properties;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Command line driver for Suro
- * 
+ *
  * @author jbae
  * @author elandau
  */
@@ -55,7 +57,7 @@ public class SuroServer {
             // Parse the command line
             Options           options = createOptions();
             final CommandLine line    = new BasicParser().parse(options, args);
-            
+
             // Load the properties file
             final Properties properties = new Properties();
             if (line.hasOption('p')) {

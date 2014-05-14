@@ -1,9 +1,18 @@
 {
     "default": {
-        "type": "local",
-        "outputDir": "/tmp/suroserver",
-        "writer": {
-            "type": "text"
-        }
+        "type": "PartitionAware",
+	"kafkaSink": {
+            "type": "Kafka",
+            "client.id": "suroserver-guestvm",
+            "metadata.broker.list": "localhost:9092",
+            "request.required.acks": 1
+	},
+	"fileSink": {
+            "type": "local",
+            "outputDir": "/tmp/suroserver",
+            "writer": {
+                "type": "text"
+            }
+	}
     }
 }
