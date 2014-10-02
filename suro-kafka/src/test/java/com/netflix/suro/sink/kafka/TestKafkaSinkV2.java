@@ -10,6 +10,7 @@ import com.netflix.suro.jackson.DefaultObjectMapper;
 import com.netflix.suro.message.*;
 import com.netflix.suro.sink.Sink;
 import com.netflix.suro.thrift.TMessageSet;
+
 import kafka.admin.TopicCommand;
 import kafka.api.FetchRequestBuilder;
 import kafka.consumer.ConsumerConfig;
@@ -22,18 +23,21 @@ import kafka.message.MessageAndMetadata;
 import kafka.message.MessageAndOffset;
 import kafka.server.KafkaConfig;
 import kafka.utils.ZkUtils;
+
 import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.RuleChain;
 import org.junit.rules.TemporaryFolder;
 import org.junit.rules.TestRule;
+
 import scala.Option;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
@@ -53,25 +57,14 @@ public class TestKafkaSinkV2 {
     private static final String TOPIC_NAME_MULTITHREAD = "routingKeyMultithread";
     private static final String TOPIC_NAME_PARTITION_BY_KEY = "routingKey_partitionByKey";
     private static final String TOPIC_NAME_BACKWARD_COMPAT = "routingKey_backwardCompat";
+    private static final String TOPIC_NAME_REQUEUEING = "routingKey_requeueing";
+
 
     @Test
     public void testDefaultParameters() throws IOException {
-        TopicCommand.createTopic(zk.getZkClient(),
-                new TopicCommand.TopicCommandOptions(new String[]{
-                        "--zookeeper", "dummy", "--create", "--topic", TOPIC_NAME,
-                        "--replication-factor", "2", "--partitions", "1"}));
-        String description = "{\n" +
-                "    \"type\": \"kafka\",\n" +
-                "    \"client.id\": \"kafkasink\",\n" +
-                "    \"metadata.broker.list\": \"" + kafkaServer.getBrokerListStr() + "\",\n" +
-                "    \"request.required.acks\": 1\n" +
-                "}";
-
-        ObjectMapper jsonMapper = new DefaultObjectMapper();
-        jsonMapper.registerSubtypes(new NamedType(KafkaSinkV2.class, "kafka"));
-        KafkaSinkV2 sink = jsonMapper.readValue(description, new TypeReference<Sink>(){});
+        KafkaSinkV2 sink = createSink( TOPIC_NAME, 1, false /* no fileQueue */ );
         sink.open();
-        // create send test messages to Kafka
+        // create & send test messages to KafkaSink
         Iterator<Message> msgIterator = new MessageSetReader(createMessageSet(TOPIC_NAME, 2)).iterator();
         HashSet<String> sentPayloads = new HashSet<String>(); // track sent messages for comparison later
         while (msgIterator.hasNext()) {
@@ -83,22 +76,8 @@ public class TestKafkaSinkV2 {
         assertEquals(sink.getNumOfPendingMessages(), 0);
         System.out.println(sink.getStat());
 
-        // get the leader
-        Option<Object> leaderOpt = ZkUtils.getLeaderForPartition(zk.getZkClient(), TOPIC_NAME, 0);
-        assertTrue("Leader for topic new-topic partition 0 should exist", leaderOpt.isDefined());
-        int leader = (Integer) leaderOpt.get();
-
-        KafkaConfig config;
-        if (leader == kafkaServer.getServer(0).config().brokerId()) {
-            config = kafkaServer.getServer(0).config();
-        } else {
-            config = kafkaServer.getServer(1).config();
-        }
         // get data back from Kafka
-        SimpleConsumer consumer = new SimpleConsumer(config.hostName(), config.port(), 100000, 100000, "clientId");
-        FetchResponse response = consumer.fetch(new FetchRequestBuilder().addFetch(TOPIC_NAME, 0, 0, 100000).build());
-
-        List<MessageAndOffset> messageSet = Lists.newArrayList(response.messageSet(TOPIC_NAME, 0).iterator());
+        List<MessageAndOffset> messageSet = getMessagesFromKafkaForTopic( TOPIC_NAME );
         assertEquals("Should have fetched 2 messages", 2, messageSet.size());
 
         for( int i=0; i<messageSet.size(); i++ ){
@@ -208,7 +187,7 @@ public class TestKafkaSinkV2 {
         sink.close();
         System.out.println(sink.getStat());
 
-        // read data back from Kafka
+        // read data back from KafkaSink
         ConsumerConnector consumer = kafka.consumer.Consumer.createJavaConsumerConnector(
                 createConsumerConfig("localhost:" + zk.getServerPort(), "gropuid"));
         Map<String, Integer> topicCountMap = new HashMap<String, Integer>();
@@ -342,6 +321,62 @@ public class TestKafkaSinkV2 {
     }
 
 
+    /**
+     * Take Kafka down and send a bunch of messages.  These should fail and be requeued.
+     * Then take Kafka up and verify that all messages were received.
+     */
+    @Test
+    public void testRequeueing() throws IOException {
+        final int testDurationMillis = 60000;
+        final int kafkaCycleMillis = 5000;  // time between kafka up/down cycles
+        final AtomicInteger sentMessages = new AtomicInteger();
+
+        final KafkaSinkV2 sink = createSink( TOPIC_NAME_REQUEUEING, 1, true /* with fileQueue */ );
+
+        // create a thread that randomly sends test messages to KafkaSink
+        Thread sender = new Thread(){
+            @Override
+            public void run() {
+                long startTime = System.currentTimeMillis();
+                sink.open();
+                // run for testDurationMillis
+                while( System.currentTimeMillis() - startTime < testDurationMillis ){
+                    // send a message to the sink
+                    sink.writeTo( new StringMessage( TOPIC_NAME_REQUEUEING, "test" ) );
+                    sentMessages.incrementAndGet();
+                    // sleep 1 ms
+                    try{ Thread.sleep( 1 ); }catch(InterruptedException e){}
+                }
+                sink.close();
+                System.out.println("Sent "+sentMessages+" messages");
+                System.out.println(sink.getStat());
+            }
+        };
+        // start sending
+        sender.start();
+
+        // start taking kafka up and down
+        while( sender.isAlive() ){
+            System.out.println("Will restart kafka with pendingMessages = "+sink.getNumOfPendingMessages());
+            restartKafka();
+            try{ Thread.sleep( kafkaCycleMillis ); }catch(InterruptedException e){}
+        }
+
+        // wait for sending to finish
+        try {
+            System.out.println("Wait for KafkaSink to finish");
+            sender.join();
+        } catch (InterruptedException e) {
+            fail("Interrupted");
+        }
+        assertEquals(sink.getNumOfPendingMessages(), 0);
+
+        // retrieve and count all messages from Kafka
+        List<String> messageSet = getAllMessagesFromKafkaForTopic( TOPIC_NAME_REQUEUEING );
+        assertEquals("Should have fetched "+sentMessages+" messages", sentMessages.intValue(), messageSet.size());
+    }
+
+
     @Test
     public void testBlockingThreadPoolExecutor() {
         int jobQueueSize = 5;
@@ -359,7 +394,12 @@ public class TestKafkaSinkV2 {
             @Override
             public boolean offer(Runnable runnable) {
                 try {
-                    put(runnable); // not to reject the task, slowing down
+                    /* We override "offer" method to use "put" semantics.  This causes us to block
+                     * on senders.execute(new Runnable(){}) instead of failing, because execute
+                     * calls BlockingQueue#offer (which normally fails when full).
+                     * For reference: http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/BlockingQueue.html
+                     */
+                    put(runnable);
                 } catch (InterruptedException e) {
                     // do nothing
                 }
@@ -368,6 +408,67 @@ public class TestKafkaSinkV2 {
         };
         testQueue(corePoolSize, maxPoolSize, jobQueue);
     }
+
+
+    private void restartKafka(){
+        // stop kafka
+        kafkaServer.after(); // call the post-test shutdown method
+        // wait briefly before starting again
+        try{ Thread.sleep( 1000 ); }catch(InterruptedException e){}
+        // start kafka
+        try {
+            kafkaServer.before(); // call the pre-test creation method
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    /** Note that if this seems to have a limit to the number of messages returned, even if we 
+     * increase the bufSize, below. */
+    private List<MessageAndOffset> getMessagesFromKafkaForTopic( String topic ){
+        // get the leader
+        Option<Object> leaderOpt = ZkUtils.getLeaderForPartition(zk.getZkClient(), topic, 0);
+        assertTrue("Leader for topic new-topic partition 0 should exist", leaderOpt.isDefined());
+        int leader = (Integer) leaderOpt.get();
+
+        KafkaConfig config;
+        if (leader == kafkaServer.getServer(0).config().brokerId()) {
+            config = kafkaServer.getServer(0).config();
+        } else {
+            config = kafkaServer.getServer(1).config();
+        }
+        // get data back from Kafka
+        int bufSize = 100000;
+        SimpleConsumer consumer = new SimpleConsumer(config.hostName(), config.port(), 
+                100000 /* timeout ms */, bufSize /* buffer size */, "clientId");
+        FetchResponse response = consumer.fetch(new FetchRequestBuilder().addFetch(topic, 0, 0, bufSize).build());
+
+        List<MessageAndOffset> messageSet = Lists.newArrayList(response.messageSet(topic, 0).iterator());
+        return messageSet;
+    }
+
+
+    private List<String> getAllMessagesFromKafkaForTopic( String topic ){
+        List<String> messages = new LinkedList<String>();
+        ConsumerConnector consumer = kafka.consumer.Consumer.createJavaConsumerConnector(
+                createConsumerConfig("localhost:" + zk.getServerPort(), "gropuid"));
+        Map<String, Integer> topicCountMap = new HashMap<String, Integer>();
+        topicCountMap.put(topic, 1);
+        Map<String, List<KafkaStream<byte[], byte[]>>> consumerMap = consumer.createMessageStreams(topicCountMap);
+        KafkaStream<byte[], byte[]> stream = consumerMap.get(topic).get(0);
+        while(true){
+            try{
+                MessageAndMetadata<byte[], byte[]> msgAndMeta = stream.iterator().next();
+                messages.add( new String( msgAndMeta.message() ) );
+            }catch( ConsumerTimeoutException e ){
+                // no more messages
+                break;
+            }
+        }
+        return messages;
+    }
+
 
     private void testQueue(int corePoolSize, int maxPoolSize, BlockingQueue<Runnable> jobQueue) {
         ThreadPoolExecutor senders = new ThreadPoolExecutor(
@@ -389,6 +490,43 @@ public class TestKafkaSinkV2 {
             });
         }
     }
+
+
+    /** Creates sink.  You must call open() before using it. */
+    private KafkaSinkV2 createSink( String topic,
+                                    long numPartitions,
+                                    boolean withFileQueue
+        ) throws IOException{
+        TopicCommand.createTopic(zk.getZkClient(),
+            new TopicCommand.TopicCommandOptions(new String[]{
+                  "--zookeeper", "dummy", "--create", "--topic", topic,
+                  "--replication-factor", "2", "--partitions", new Long(numPartitions).toString()}));
+        String fileQueue = String.format(
+            "    \"queue4Sink\": {\n" +
+            "        \"type\": \"file\",\n" +
+            "        \"path\": \"%s\",\n" +
+            "        \"name\": \"testKafkaSink\"\n" +
+            "    }\n", tempDir.newFolder().getAbsolutePath());
+        String keyTopicMap = String.format("   \"keyTopicMap\": {\n" +
+            "        \"%s\": \"key\"\n" +
+            "    }", topic);
+
+        String description = "{\n" +
+            "    \"type\": \"kafka\",\n" +
+            "    \"client.id\": \"kafkasink\",\n" +
+            "    \"metadata.broker.list\": \"" + kafkaServer.getBrokerListStr() + "\",\n" +
+            "    \"request.required.acks\": 1,\n" +
+            (withFileQueue? fileQueue + ",\n" : "") +
+            keyTopicMap + "\n" +
+            "}";
+
+        // setup sink
+        ObjectMapper jsonMapper = new DefaultObjectMapper();
+        jsonMapper.registerSubtypes(new NamedType(KafkaSinkV2.class, "kafka"));
+        KafkaSinkV2 sink = jsonMapper.readValue(description, new TypeReference<Sink>(){});
+        return sink;
+    }
+
 
     private static ConsumerConfig createConsumerConfig(String a_zookeeper, String a_groupId) {
         Properties props = new Properties();
