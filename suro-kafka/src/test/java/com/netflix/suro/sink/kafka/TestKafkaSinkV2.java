@@ -22,6 +22,8 @@ import kafka.javaapi.consumer.SimpleConsumer;
 import kafka.message.MessageAndMetadata;
 import kafka.message.MessageAndOffset;
 import kafka.server.KafkaConfig;
+import kafka.server.KafkaServer;
+import kafka.server.KafkaServerStartable;
 import kafka.utils.ZkUtils;
 
 import org.junit.ClassRule;
@@ -34,6 +36,7 @@ import org.junit.rules.TestRule;
 import scala.Option;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
@@ -278,10 +281,10 @@ public class TestKafkaSinkV2 {
                                                 consumer.createMessageStreams(topicCountMap);
         KafkaStream<byte[], byte[]> stream = consumerMap.get(TOPIC_NAME_BACKWARD_COMPAT).get(0);
 
-        // Send 20 test message, using the old and new Kafka sinks.
+        // Send 10 test message, using the old and new Kafka sinks.
         // Retrieve the messages and ensure that they are identical and sent to the same partition.
         Random rand = new Random();
-        int messageCount = 20;
+        int messageCount = 10;
         for (int i = 0; i < messageCount; ++i) {
             Map<String, Object> msgMap = new ImmutableMap.Builder<String, Object>()
                     .put("key", new Long( rand.nextLong() ) )
@@ -331,7 +334,22 @@ public class TestKafkaSinkV2 {
         final int kafkaCycleMillis = 5000;  // time between kafka up/down cycles
         final AtomicInteger sentMessages = new AtomicInteger();
 
-        final KafkaSinkV2 sink = createSink( TOPIC_NAME_REQUEUEING, 1, true /* with fileQueue */ );
+        // create lossy proxies to simulate failure connecting to kafka
+        ArrayList<LossyKafkaProxy> proxies = new ArrayList<LossyKafkaProxy>();
+        final int proxyStartPort = 12200;
+        String localhost = "127.0.0.1"; //InetAddress.getLocalHost().getHostName();
+        for( int i=0; i<2; i++ ){ // two Kafka servers
+            LossyKafkaProxy lossyProxy = new LossyKafkaProxy( proxyStartPort+i, localhost,
+                                                    kafkaServer.getServer(i).socketServer().port() );
+            proxies.add( lossyProxy );
+            lossyProxy.start();
+        }
+        String brokerProxies = localhost + ":" + proxyStartPort + "," 
+                                + localhost + ":" + (proxyStartPort+1);
+
+        final KafkaSinkV2 sink = createSink( TOPIC_NAME_REQUEUEING, 1, true /* with fileQueue */,
+                                             brokerProxies );
+        System.out.println("Created sink connected to proxies: "+brokerProxies);
 
         // create a thread that randomly sends test messages to KafkaSink
         Thread sender = new Thread(){
@@ -355,16 +373,6 @@ public class TestKafkaSinkV2 {
         // start sending
         sender.start();
 
-        // start taking kafka up and down
-        while( sender.isAlive() ){
-            System.out.println("Will restart kafka with pendingMessages = "+sink.getNumOfPendingMessages());
-            System.out.println("Sink stats: "+sink.getStat());
-            System.out.println("Stopping Kafka...");
-            kafkaServer.restart( 1000 /* leave Kafka down for one second */ );
-            System.out.println("New Kafka is: "+kafkaServer.getBrokerListStr());
-            try{ Thread.sleep( kafkaCycleMillis ); }catch(InterruptedException e){}
-        }
-
         // wait for sending to finish
         try {
             System.out.println("Wait for KafkaSink to finish");
@@ -373,6 +381,14 @@ public class TestKafkaSinkV2 {
             fail("Interrupted");
         }
         assertEquals(sink.getNumOfPendingMessages(), 0);
+
+        // stop proxies
+        for( LossyKafkaProxy proxy : proxies ){
+            try {
+                proxy.shutdown();
+            } catch (InterruptedException e) {
+            }
+        }
 
         // retrieve and count all messages from Kafka
         List<String> messageSet = getAllMessagesFromKafkaForTopic( TOPIC_NAME_REQUEUEING );
@@ -481,10 +497,18 @@ public class TestKafkaSinkV2 {
     }
 
 
+    private KafkaSinkV2 createSink( String topic,
+            long numPartitions,
+            boolean withFileQueue
+    ) throws IOException{
+        return createSink( topic, numPartitions, withFileQueue, kafkaServer.getBrokerListStr() );
+    }
+
     /** Creates sink.  You must call open() before using it. */
     private KafkaSinkV2 createSink( String topic,
                                     long numPartitions,
-                                    boolean withFileQueue
+                                    boolean withFileQueue,
+                                    String kafkaBrokers
         ) throws IOException{
         TopicCommand.createTopic(zk.getZkClient(),
             new TopicCommand.TopicCommandOptions(new String[]{
@@ -503,7 +527,7 @@ public class TestKafkaSinkV2 {
         String description = "{\n" +
             "    \"type\": \"kafka\",\n" +
             "    \"client.id\": \"kafkasink\",\n" +
-            "    \"metadata.broker.list\": \"" + kafkaServer.getBrokerListStr() + "\",\n" +
+            "    \"metadata.broker.list\": \"" + kafkaBrokers + "\",\n" +
             "    \"request.required.acks\": 1,\n" +
             (withFileQueue? fileQueue + ",\n" : "") +
             keyTopicMap + "\n" +
