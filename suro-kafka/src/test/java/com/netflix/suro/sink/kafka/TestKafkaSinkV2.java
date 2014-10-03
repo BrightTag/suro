@@ -358,7 +358,10 @@ public class TestKafkaSinkV2 {
         // start taking kafka up and down
         while( sender.isAlive() ){
             System.out.println("Will restart kafka with pendingMessages = "+sink.getNumOfPendingMessages());
-            restartKafka();
+            System.out.println("Sink stats: "+sink.getStat());
+            System.out.println("Stopping Kafka...");
+            kafkaServer.restart( 1000 /* leave Kafka down for one second */ );
+            System.out.println("New Kafka is: "+kafkaServer.getBrokerListStr());
             try{ Thread.sleep( kafkaCycleMillis ); }catch(InterruptedException e){}
         }
 
@@ -407,20 +410,6 @@ public class TestKafkaSinkV2 {
             }
         };
         testQueue(corePoolSize, maxPoolSize, jobQueue);
-    }
-
-
-    private void restartKafka(){
-        // stop kafka
-        kafkaServer.after(); // call the post-test shutdown method
-        // wait briefly before starting again
-        try{ Thread.sleep( 1000 ); }catch(InterruptedException e){}
-        // start kafka
-        try {
-            kafkaServer.before(); // call the pre-test creation method
-        } catch (Throwable e) {
-            e.printStackTrace();
-        }
     }
 
 

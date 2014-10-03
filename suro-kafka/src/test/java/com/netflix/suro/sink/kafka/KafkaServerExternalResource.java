@@ -99,4 +99,23 @@ public class KafkaServerExternalResource extends ExternalResource {
 
         return props;
     }
+
+    /** restarts the servers, waits for @downTimeMs, then starts them again, blocking while it completes */
+    public void restart( int downTimeMs ){
+        // stop
+        if (server1 != null) {
+            server1.shutdown();
+            server1.awaitShutdown();
+        }
+        if (server2 != null) {
+            server2.shutdown();
+            server2.awaitShutdown();
+        }
+        try { Thread.sleep(downTimeMs); } catch (InterruptedException e) {}
+
+        // start
+        server1 = createServer(config1);
+        server2 = createServer(config2);
+        servers = Lists.newArrayList(server1, server2);
+    }
 }
