@@ -98,7 +98,7 @@ public class SuroServer {
                 }
             });
 
-            waitForShutdown(getControlPort(options));
+            waitForShutdown(getControlPort(properties));
         } catch (Throwable e) {
             System.err.println("SuroServer startup failed: " + e.getMessage());
             System.exit(-1);
@@ -135,13 +135,11 @@ public class SuroServer {
        new SuroControl().start(port);
     }
 
-    private static int getControlPort(Options options) {
-        Option opt = options.getOption("c");
-        String value = opt.getValue();
+    private static int getControlPort(Properties properties) {
+        String value = properties.getProperty("SuroServer.controlPort");
         if(value == null) {
             return DEFAULT_CONTROL_PORT;
         }
-
         return Integer.parseInt(value);
     }
 
